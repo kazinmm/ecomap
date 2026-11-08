@@ -1,0 +1,521 @@
+
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>EcoMap - Pontos Ecológicos</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+
+        body {
+            background-color: #f3f7f3;
+            color: #26352a;
+        }
+
+        header {
+            background-color: #247a43;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        header h1 {
+            margin-bottom: 7px;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            max-width: 1400px;
+            margin: auto;
+        }
+
+        .painel {
+            width: 340px;
+            min-width: 280px;
+            background-color: white;
+            padding: 18px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .painel h2 {
+            margin-bottom: 15px;
+            color: #247a43;
+        }
+
+        button {
+            width: 100%;
+            padding: 11px;
+            margin-bottom: 10px;
+            border: none;
+            border-radius: 6px;
+            background-color: #247a43;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background-color: #195c32;
+        }
+
+        #mensagem {
+            font-size: 13px;
+            margin: 8px 0 15px;
+            line-height: 1.4;
+            color: #555;
+        }
+
+        .ponto-item {
+            display: block;
+            text-align: left;
+            background-color: #f0f6f1;
+            color: #26352a;
+            border-left: 4px solid #247a43;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+
+        .ponto-item strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .ponto-item span {
+            display: block;
+            font-size: 13px;
+            margin-top: 4px;
+        }
+
+        .mapa-container {
+            flex: 1;
+            min-width: 0;
+        }
+
+        #mapa {
+            width: 100%;
+            height: 600px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .popup {
+            line-height: 1.6;
+        }
+
+        .popup a {
+            color: #247a43;
+            font-weight: bold;
+        }
+
+        @media (max-width: 800px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .painel {
+                width: 100%;
+            }
+
+            #mapa {
+                height: 450px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h1>EcoMap</h1>
+        <p>Encontre pontos ecológicos em Anápolis</p>
+    </header>
+
+    <main class="container">
+
+        <section class="painel">
+
+            <h2>Pontos ecológicos</h2>
+
+            <button id="btnLocalizacao">
+                Usar minha localização
+            </button>
+
+            <button id="btnGoogle">
+                Buscar pontos no Google Maps
+            </button>
+
+            <button id="btnAtualizar">
+                Atualizar pontos do backend
+            </button>
+
+            <p id="mensagem">
+                Carregando pontos ecológicos...
+            </p>
+
+            <div id="listaPontos"></div>
+
+        </section>
+
+        <section class="mapa-container">
+            <div id="mapa"></div>
+        </section>
+
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+
+        const API_URL = "http://localhost:8080/api/pontos";
+
+        const mapa = L.map("mapa").setView(
+            [-16.328, -48.953],
+            14
+        );
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(mapa);
+
+        const camadaPontos = L.layerGroup().addTo(mapa);
+
+        const marcadores = new Map();
+
+        let pontos = [];
+        let localizacaoUsuario = null;
+        let marcadorUsuario = null;
+
+        const listaPontos = document.getElementById("listaPontos");
+        const mensagem = document.getElementById("mensagem");
+
+        function escaparHTML(valor) {
+            return String(valor ?? "").replace(/[&<>"']/g, function (letra) {
+                const caracteres = {
+                    "&": "&amp;",
+                    "<": "&lt;",
+                    ">": "&gt;",
+                    '"': "&quot;",
+                    "'": "&#039;"
+                };
+
+                return caracteres[letra];
+            });
+        }
+
+        function calcularDistancia(lat1, lon1, lat2, lon2) {
+
+            const raio = 6371;
+
+            const diferencaLatitude =
+                (lat2 - lat1) * Math.PI / 180;
+
+            const diferencaLongitude =
+                (lon2 - lon1) * Math.PI / 180;
+
+            const a =
+                Math.sin(diferencaLatitude / 2) ** 2 +
+                Math.cos(lat1 * Math.PI / 180) *
+                Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(diferencaLongitude / 2) ** 2;
+
+            const c = 2 * Math.atan2(
+                Math.sqrt(a),
+                Math.sqrt(1 - a)
+            );
+
+            return raio * c;
+        }
+
+        function mostrarPontos() {
+
+            listaPontos.innerHTML = "";
+
+            let pontosOrdenados = [...pontos];
+
+            if (localizacaoUsuario) {
+
+                pontosOrdenados.sort((a, b) => {
+
+                    const distanciaA = calcularDistancia(
+                        localizacaoUsuario.latitude,
+                        localizacaoUsuario.longitude,
+                        a.latitude,
+                        a.longitude
+                    );
+
+                    const distanciaB = calcularDistancia(
+                        localizacaoUsuario.latitude,
+                        localizacaoUsuario.longitude,
+                        b.latitude,
+                        b.longitude
+                    );
+
+                    return distanciaA - distanciaB;
+                });
+            }
+
+            if (pontosOrdenados.length === 0) {
+
+                listaPontos.textContent = "Nenhum ponto encontrado.";
+                return;
+            }
+
+            pontosOrdenados.forEach(ponto => {
+
+                const botao = document.createElement("button");
+                botao.className = "ponto-item";
+
+                const nome = document.createElement("strong");
+                nome.textContent = ponto.nome;
+
+                const tipo = document.createElement("span");
+                tipo.textContent = ponto.tipo;
+
+                const endereco = document.createElement("span");
+                endereco.textContent = ponto.endereco;
+
+                botao.appendChild(nome);
+                botao.appendChild(tipo);
+                botao.appendChild(endereco);
+
+                if (localizacaoUsuario) {
+
+                    const distancia = calcularDistancia(
+                        localizacaoUsuario.latitude,
+                        localizacaoUsuario.longitude,
+                        ponto.latitude,
+                        ponto.longitude
+                    );
+
+                    const distanciaTexto = document.createElement("span");
+
+                    distanciaTexto.textContent =
+                        "Distância aproximada: " +
+                        distancia.toFixed(2) + " km";
+
+                    botao.appendChild(distanciaTexto);
+                }
+
+                botao.addEventListener("click", function () {
+
+                    mapa.setView(
+                        [ponto.latitude, ponto.longitude],
+                        17
+                    );
+
+                    const marcador = marcadores.get(ponto.id);
+
+                    if (marcador) {
+                        marcador.openPopup();
+                    }
+                });
+
+                listaPontos.appendChild(botao);
+            });
+        }
+
+        async function carregarPontos() {
+
+            mensagem.textContent = "Carregando pontos ecológicos...";
+
+            try {
+
+                const resposta = await fetch(API_URL);
+
+                if (!resposta.ok) {
+                    throw new Error("Erro ao buscar os pontos.");
+                }
+
+                const dados = await resposta.json();
+
+                if (!Array.isArray(dados)) {
+                    throw new Error("Resposta inválida do backend.");
+                }
+
+                pontos = dados;
+
+                camadaPontos.clearLayers();
+                marcadores.clear();
+
+                const coordenadas = [];
+
+                pontos.forEach(ponto => {
+
+                    const latitude = Number(ponto.latitude);
+                    const longitude = Number(ponto.longitude);
+
+                    if (!Number.isFinite(latitude) ||
+                        !Number.isFinite(longitude)) {
+                        return;
+                    }
+
+                    coordenadas.push([latitude, longitude]);
+
+                    const marcador = L.marker([
+                        latitude,
+                        longitude
+                    ]).addTo(camadaPontos);
+
+                    const destino =
+                        latitude + "," + longitude;
+
+                    const linkRota =
+                        "https://www.google.com/maps/dir/?api=1&destination=" +
+                        encodeURIComponent(destino);
+
+                    const popup = `
+                        <div class="popup">
+                            <strong>${escaparHTML(ponto.nome)}</strong>
+                            <br>
+                            ${escaparHTML(ponto.tipo)}
+                            <br>
+                            ${escaparHTML(ponto.endereco)}
+                            <br>
+                            <a href="${linkRota}" target="_blank" rel="noopener">
+                                Como chegar
+                            </a>
+                        </div>
+                    `;
+
+                    marcador.bindPopup(popup);
+
+                    marcadores.set(ponto.id, marcador);
+                });
+
+                mostrarPontos();
+
+                if (coordenadas.length > 0) {
+
+                    if (coordenadas.length === 1) {
+
+                        mapa.setView(coordenadas[0], 15);
+
+                    } else {
+
+                        mapa.fitBounds(coordenadas, {
+                            padding: [30, 30],
+                            maxZoom: 15
+                        });
+                    }
+                }
+
+                mensagem.textContent =
+                    pontos.length + " ponto(s) carregado(s) do backend.";
+
+            } catch (erro) {
+
+                console.error(erro);
+
+                mensagem.textContent =
+                    "Não foi possível conectar ao backend. " +
+                    "Verifique se o Spring Boot está em execução.";
+
+                listaPontos.textContent =
+                    "Não foi possível carregar os pontos.";
+            }
+        }
+
+        function usarMinhaLocalizacao() {
+
+            if (!navigator.geolocation) {
+
+                mensagem.textContent =
+                    "Seu navegador não permite obter a localização.";
+
+                return;
+            }
+
+            mensagem.textContent =
+                "Obtendo sua localização...";
+
+            navigator.geolocation.getCurrentPosition(
+
+                function (posicao) {
+
+                    const latitude = posicao.coords.latitude;
+                    const longitude = posicao.coords.longitude;
+
+                    localizacaoUsuario = {
+                        latitude: latitude,
+                        longitude: longitude
+                    };
+
+                    if (marcadorUsuario) {
+                        mapa.removeLayer(marcadorUsuario);
+                    }
+
+                    marcadorUsuario = L.marker([
+                        latitude,
+                        longitude
+                    ]).addTo(mapa);
+
+                    marcadorUsuario.bindPopup(
+                        "Sua localização"
+                    );
+
+                    marcadorUsuario.openPopup();
+
+                    mapa.setView([
+                        latitude,
+                        longitude
+                    ], 14);
+
+                    mostrarPontos();
+
+                    mensagem.textContent =
+                        "Localização obtida. Pontos ordenados pela distância aproximada.";
+
+                },
+
+                function () {
+
+                    mensagem.textContent =
+                        "Não foi possível obter sua localização. Verifique a permissão do navegador.";
+
+                }
+            );
+        }
+
+        function buscarGoogleMaps() {
+
+            const pesquisa = encodeURIComponent(
+                "pontos de coleta ecológica perto de mim"
+            );
+
+            const url =
+                "https://www.google.com/maps/search/?api=1&query=" +
+                pesquisa;
+
+            window.open(url, "_blank", "noopener");
+        }
+
+        document.getElementById("btnLocalizacao")
+            .addEventListener("click", usarMinhaLocalizacao);
+
+        document.getElementById("btnGoogle")
+            .addEventListener("click", buscarGoogleMaps);
+
+        document.getElementById("btnAtualizar")
+            .addEventListener("click", carregarPontos);
+
+        carregarPontos();
+
+    </script>
+
+</body>
+</html>
